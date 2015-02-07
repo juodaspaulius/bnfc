@@ -19,8 +19,8 @@
 -}
 module BNFC.Backend.Haskell.MkErrM where
 
-errM :: String -> b -> String
-errM errMod _ = unlines
+errM :: String -> Bool -> String -> b -> String
+errM errMod pos absMod _ = unlines
 	   [
 	    "-- BNF Converter: Error Monad",
 	    "-- Copyright (C) 2004  Author:  Aarne Ranta",
@@ -33,18 +33,29 @@ errM errMod _ = unlines
       "import Control.Monad (MonadPlus(..), liftM)",
       "import Control.Applicative (Applicative(..), Alternative(..))",
       "",
-	    "data Err a = Ok a | Bad String",
+      if pos then "import " ++ absMod else "",
+      "",
+	    "data Err a = Ok a | Bad" ++ (if pos then " Pos" else "") ++ " String",
 	    "  deriving (Read, Show, Eq, Ord)",
 	    "",
 	    "instance Monad Err where",
 	    "  return      = Ok",
-	    "  fail        = Bad",
+	    (if pos then
+      "  fail        = Bad noPos"
+	    else
+      "  fail        = Bad"),
 	    "  Ok a  >>= f = f a",
-	    "  Bad s >>= _ = Bad s",
+      (if pos then
+      "  Bad p s >>= _ = Bad p s"
+      else
+      "  Bad s >>= _ = Bad s"),
       "",
       "instance Applicative Err where",
       "  pure = Ok",
-      "  (Bad s) <*> _ = Bad s",
+      (if pos then
+      "  (Bad p s) <*> _ = Bad p s"
+      else
+      "  (Bad s) <*> _ = Bad s"),
       "  (Ok f) <*> o  = liftM f o",
       "",
       "",
@@ -52,8 +63,14 @@ errM errMod _ = unlines
       "  fmap = liftM",
       "",
       "instance MonadPlus Err where",
-      "  mzero = Bad \"Err.mzero\"",
-      "  mplus (Bad _) y = y",
+      (if pos then
+      "  mzero = Bad noPos \"Err.mzero\""
+      else
+      "  mzero = Bad \"Err.mzero\""),
+      (if pos then
+      "  mplus (Bad _ _) y = y"
+      else
+      "  mplus (Bad _) y = y"),
       "  mplus x       _ = x",
       "",
       "instance Alternative Err where",

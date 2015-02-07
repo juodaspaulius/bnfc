@@ -27,14 +27,14 @@ import Data.Char(toLower)
 import Text.PrettyPrint
 
 -- derive pretty-printer from a BNF grammar. AR 15/2/2002
-cf2Printer :: Bool -> Bool -> String -> String -> CF -> String
-cf2Printer byteStrings functor name absMod cf = unlines [
+cf2Printer :: Bool -> Bool -> Bool -> String -> String -> CF -> String
+cf2Printer byteStrings functor pos name absMod cf = unlines [
   prologue byteStrings name absMod,
   integerRule cf,
   doubleRule cf,
   if hasIdent cf then identRule byteStrings cf else "",
   unlines [ownPrintRule byteStrings cf own | (own,_) <- tokenPragmas cf],
-  rules functor cf
+  rules functor pos cf
   ]
 
 
@@ -135,10 +135,10 @@ ownPrintRule byteStrings cf own = unlines $ [
 
 -- copy and paste from BNFC.Backend.Haskell.CFtoTemplate
 
-rules :: Bool -> CF -> String
-rules functor cf = unlines $
+rules :: Bool -> Bool -> CF -> String
+rules functor pos cf = unlines $
 
-  map (\(s,xs) -> render (case_fun functor s (map toArgs xs)) ++++ ifList cf s) $ cf2data cf
+  map (\(s,xs) -> render (case_fun functor pos s (map toArgs xs)) ++++ ifList cf s) $ cf2data cf
  where
    toArgs (cons,_) = (cons, ruleOf cons)
    ruleOf s = maybe undefined id $ lookupRule s (rulesOfCF cf)
@@ -167,8 +167,8 @@ rules functor cf = unlines $
 -- instance Print (Expr a) where
 --   prt i e = case e of
 --     EInternal _ expr -> prPrec i 0 (concatD [prt 0 expr])
-case_fun :: Bool -> Cat -> [(String, (Cat, [Either Cat String]))] -> Doc
-case_fun functor cat xs =
+case_fun :: Bool -> Bool -> Cat -> [(String, (Cat, [Either Cat String]))] -> Doc
+case_fun functor pos cat xs =
     "instance Print" <+> type_ <+> "where"
     $+$ nest 2 ("prt i" <+> "e = case e of" $$ nest 2 (vcat (map pOneCase xs)))
   where
@@ -176,7 +176,7 @@ case_fun functor cat xs =
           | otherwise = text (show cat)
     pOneCase (f, (cat, rhs)) =
       let vars = names (map (checkRes . var) (filter (/=InternalCat) $ lefts rhs)) 0
-      in text f <+> (if functor then "_" else empty) <+> hsep vars <+> "->"
+      in text f <+> (if pos then "_" else empty) <+> (if functor then "_" else empty) <+> hsep vars <+> "->"
       <+> "prPrec i" <+> integer (precCat cat) <+> mkRhs (map render vars) rhs
     names [] _ = []
     names (x:xs) n

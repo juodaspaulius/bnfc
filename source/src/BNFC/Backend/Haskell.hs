@@ -62,7 +62,7 @@ makeHaskell opts cf = do
       errMod = errFileM opts
       shareMod = shareFileM opts
   do
-    mkfile (absFile opts) $ cf2Abstract (byteStrings opts) (ghcExtensions opts) (functor opts) absMod cf
+    mkfile (absFile opts) $ cf2Abstract (byteStrings opts) (ghcExtensions opts) (functor opts) (positionsInAST opts) absMod cf
     case alexMode opts of
       Alex1 -> do
         mkfile (alexFile opts) $ cf2alex lexMod errMod cf
@@ -73,16 +73,16 @@ makeHaskell opts cf = do
       Alex3 -> do
         mkfile (alexFile opts) $ cf2alex3 lexMod errMod shareMod (shareStrings opts) (byteStrings opts) cf
         liftIO $ printf "Use Alex 3.0 to compile %s.\n" (alexFile opts)
-    unless (cnf opts) $ do        
+    unless (cnf opts) $ do
       mkfile (happyFile opts) $
-        cf2HappyS parMod absMod lexMod errMod (glr opts) (byteStrings opts) (functor opts) cf
+        cf2HappyS parMod absMod lexMod errMod opts cf
       liftIO $ printf "%s Tested with Happy 1.15\n" (happyFile opts)
     mkfile (tFile opts)        $ testfile opts cf
     mkfile (txtFile opts)      $ cfToTxt (lang opts) cf
-    mkfile (templateFile opts) $ cf2Template (templateFileM opts) absMod errMod (functor opts) cf
-    mkfile (printerFile opts)  $ cf2Printer (byteStrings opts) (functor opts) prMod absMod cf
+    mkfile (templateFile opts) $ cf2Template (templateFileM opts) absMod errMod (functor opts) (positionsInAST opts) cf
+    mkfile (printerFile opts)  $ cf2Printer (byteStrings opts) (functor opts) (positionsInAST opts) prMod absMod cf
     when (hasLayout cf) $ mkfile (layoutFile opts) $ cf2Layout (alex1 opts) (inDir opts) layMod lexMod cf
-    mkfile (errFile opts)      $ errM errMod cf
+    mkfile (errFile opts)      $ errM errMod (positionsInAST opts) absMod cf
     when (shareStrings opts) $ mkfile (shareFile opts)    $ sharedString shareMod (byteStrings opts) cf
     Makefile.mkMakefile opts $ makefile opts
     case xml opts of
@@ -102,7 +102,7 @@ makefile opts = makeA where
   makeA = Makefile.mkRule "all" []
            ([ "happy -gca " ++ glr_params ++ happyFile opts | not (cnf opts) ] ++
             [ "alex -g " ++ alexFile opts ] ++
-            [ if cnf opts 
+            [ if cnf opts
               then "ghc --make TestCNF.hs"
               else "ghc --make " ++ tFile opts ++ " -o " ++ mkFile withLang "Test" "" opts])
         $ Makefile.mkRule "clean" []
@@ -172,7 +172,7 @@ testfile opts cf
 		 "runFile v p f = putStrLn f >> readFile f >>= run v p",
 		 "",
 		 "run :: (" ++ xpr ++ if_glr "TreeDecode a, " ++ "Print a, Show a) => Verbosity -> ParseFun a -> String -> IO ()",
-		 if use_glr then run_glr else run_std use_xml,
+		 if use_glr then run_glr else run_std use_xml (positionsInAST opts),
 		 "",
 		 "showTree :: (Show a, Print a) => Int -> a -> IO ()",
 		 "showTree v tree",
@@ -192,7 +192,7 @@ testfile opts cf
                  "  exitFailure",
                  "",
 		 "main :: IO ()",
-		 "main = do", 
+		 "main = do",
                  "  args <- getArgs",
 		 "  case args of",
                  "    [\"--help\"] -> usage",
@@ -206,21 +206,37 @@ testfile opts cf
 		 if_glr $ lift_parser
 		 ]
 
-run_std xml
- = unlines
-   [ "run v p s = let ts = myLLexer s in case p ts of"
-   , "           Bad s    -> do putStrLn \"\\nParse              Failed...\\n\""
-   , "                          putStrV v \"Tokens:\""
-   , "                          putStrV v $ show ts"
-   , "                          putStrLn s"
-   , "                          exitFailure"
-   , "           Ok  tree -> do putStrLn \"\\nParse Successful!\""
-   , "                          showTree v tree"
-   , if xml then
-     "                          putStrV v $ \"\\n[XML]\\n\\n\" ++ printXML tree"
-     else ""
-   , "                          exitSuccess"
-   ]
+-- run_std xml pos
+--  = unlines
+--    [ "run v p s = let ts = myLLexer s in case p ts of"
+--    , if pos then
+--      "           Bad pos s    -> do putStrLn \"\\nParse              Failed...\\n\""
+--      else
+--      "           Bad s    -> do putStrLn \"\\nParse              Failed...\\n\""
+--    , "                          putStrV v \"Tokens:\""
+--    , "                          putStrV v $ show ts"
+--    , "                          putStrLn s"
+--    , "                          exitFailure"
+--    , "           Ok  tree -> do putStrLn \"\\nParse Successful!\""
+--    , "                          showTree v tree"
+--    , if xml then
+--      "                          putStrV v $ \"\\n[XML]\\n\\n\" ++ printXML tree"
+--      else ""
+--    , "                          exitSuccess"
+--    ]
+run_std xml pos =
+  render $ hang "run v p s = let ts = myLLexer s in case p ts of" 12 $
+    hang ("Bad" <+> (if pos then "pos" else empty) <+> "s -> do") 16
+      (vcat ["putStrLn \"\\nParse              Failed...\\n\""
+      , "putStrV v \"Tokens:\""
+      , "putStrV v $ show ts"
+      , "putStrLn s"
+      , "exitFailure" ])
+    $+$ hang "Ok  tree -> do" 16
+      ("putStrLn \"\\nParse Successful!\""
+      $+$ "showTree v tree"
+      $+$ if xml then "putStrV v $ \"\\n[XML]\\n\\n\" ++ printXML tree" else empty
+      $+$ "exitSuccess")
 
 run_glr
  = unlines

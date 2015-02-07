@@ -83,7 +83,7 @@ makeHaskellProfile opts cfp = do
 ----      writeFileRep (layoutFile (inDir opts) name) $ cf2Layout alex1 (inDir opts) layMod lexMod cf
 ----      else return ()
     writeFileRep (tFile (inDir opts) name)        $ testfile (inDir opts) name (xml opts>0) cf
-    writeFileRep (errFile (inDir opts) name)      $ errM errMod cf
+    writeFileRep (errFile (inDir opts) name)      $ errM errMod (positionsInAST opts) absMod cf
     if (isJust $ make opts)
        then (writeFileRep (mFile (inDir opts) name) $ makefile (inDir opts) name)
        else return ()

@@ -28,10 +28,11 @@ import Text.PrettyPrint
 cf2Abstract :: Bool     -- ^ Use ByteString instead of String
             -> Bool     -- ^ Use GHC specific extensions
             -> Bool     -- ^ Make the tree a functor
+            -> Bool     -- ^ Positions in AST nodes
             -> String   -- ^ module name
             -> CF       -- ^ Grammar
             -> String
-cf2Abstract byteStrings ghcExtensions functor name cf = unlines $
+cf2Abstract byteStrings ghcExtensions functor pos name cf = unlines $
   (if ghcExtensions then "{-# LANGUAGE DeriveDataTypeable #-}" else "") :
   (if ghcExtensions then "{-# LANGUAGE DeriveGeneric #-}" else "") :
   ("module "++name +++ "where\n") :
@@ -39,11 +40,39 @@ cf2Abstract byteStrings ghcExtensions functor name cf = unlines $
   (if byteStrings then "import qualified Data.ByteString.Char8 as BS" else "") :
   (if ghcExtensions then "import Data.Data (Data,Typeable)" else "") :
   (if ghcExtensions then "import GHC.Generics (Generic)" else "") :
+  (if pos then prSpanTypes derivingClasses else "") :
   (map (render . \c -> prSpecialData byteStrings (isPositionCat cf c) derivingClasses c) (specialCats cf)
-  ++ map (render . prData functor derivingClasses) (cf2data cf))
+  ++ (if pos then (map (render . genSpecSpanInstance) (specialCats cf)) else [])
+  ++ map (render . prData functor pos derivingClasses) (cf2data cf))
   where
     derivingClasses = ["Eq","Ord","Show","Read"]
         ++ if ghcExtensions then ["Data","Typeable","Generic"] else []
+
+prSpanTypes :: [String] -> String
+prSpanTypes classes = render $ vcat
+  [ "data Pos = Pos Integer Integer" <+> deriving_ classes
+  , "noPos :: Pos"
+  , "noPos = Pos 0 0"
+  , ""
+  , "data Span = Span Pos Pos" <+> deriving_ classes
+  , "noSpan :: Span"
+  , "noSpan = Span noPos noPos"
+  , ""
+  , hang "class Spannable n where" 2 "getSpan :: n -> Span"
+  , ""
+  , hang "instance Spannable n => Spannable [n] where" 2
+    ("getSpan (x:xs) = foldr (\\item acc -> getSpan item >- acc ) (getSpan x) xs"
+    $+$ "getSpan [] = noSpan")
+  , ""
+  , "(>-) :: Span -> Span -> Span"
+  , "(>-) (Span (Pos 0 0) (Pos 0 0)) s = s"
+  , "(>-) r (Span (Pos 0 0) (Pos 0 0)) = r"
+  , "(>-) (Span m _) (Span _ p) = Span m p"
+  , ""
+  , "len :: [a] -> Integer"
+  , "len = toInteger . length"
+  ]
+
 
 -- | >>> prData False ["Eq", "Ord", "Show", "Read"] (Cat "C", [("C1", [Cat "C"]), ("CIdent", [Cat "Ident"])])
 -- data C = C1 C | CIdent Ident
@@ -79,15 +108,16 @@ cf2Abstract byteStrings ghcExtensions functor name cf = unlines $
 -- instance Functor ExpList where
 --     fmap f x = case x of
 --         Exps a exps -> Exps (f a) (map (fmap f) exps)
-prData :: Bool -> [String] -> Data -> Doc
-prData functor derivingClasses (cat,rules) =
+prData :: Bool -> Bool -> [String] -> Data -> Doc
+prData functor pos derivingClasses (cat,rules) =
     hang ("data" <+> dataType) 4 (constructors rules)
     $+$ nest 2 (deriving_ derivingClasses)
     $+$ ""
-    $+$ if functor then genFunctorInstance (cat, rules) else empty
+    $+$ if functor then genFunctorInstance pos (cat, rules) else empty
+    $+$ if pos then genSpanInstance (cat, rules) else empty
   where
     prRule (fun,cats) =
-        hsep $ concat [[text fun], ["a" | functor], map prArg cats]
+        hsep $ concat [[text fun], ["Span" | pos], ["a" | functor], map prArg cats]
     dataType =
         if functor then text (show cat) <+> "a"
                    else text (show cat)
@@ -107,14 +137,26 @@ prData functor derivingClasses (cat,rules) =
 --         Ints a integers -> Ints (f a) integers
 --         Exps a exps -> Exps (f a) (map (fmap f) exps)
 --
-genFunctorInstance :: Data -> Doc
-genFunctorInstance (cat, cons) =
+-- If first parameter is True unused positional paramter is inserted first:
+-- instance Functor C where
+--     fmap f x = case x of
+--         C1 _ a c1 c2 -> C1 (f a) (fmap f c1) (fmap f c2)
+--         CIdent a ident -> CIdent (f a) ident
+-- >>> genFunctorInstance (Cat "SomeLists", [("Ints", [ListCat (TokenCat "Integer")]), ("Exps", [ListCat (Cat "Exp")])])
+-- instance Functor SomeLists where
+--     fmap f x = case x of
+--         Ints _ a integers -> Ints (f a) integers
+--         Exps _ a exps -> Exps (f a) (map (fmap f) exps)
+--
+
+genFunctorInstance :: Bool -> Data -> Doc
+genFunctorInstance pos (cat, cons) =
     "instance Functor" <+> text (show cat) <+> "where"
     $+$ nest 4 ( "fmap f x = case x of" $+$ nest 4 (vcat (map mkCase cons)))
   where
     mkCase (f,args) =
         let variables = catvars args
-        in text f <+> "a" <+> hsep variables
+        in text f <+> (if pos then "_" else empty) <+> "a" <+> hsep variables
           <+> "->" <+> text f <+> "(f a)" <+> hsep (map reccurse (zip args variables))
     -- We reccursively call fmap on non-terminals only if they are not
     -- token categories
@@ -122,6 +164,34 @@ genFunctorInstance (cat, cons) =
     reccurse (ListCat (TokenCat _), var) = var
     reccurse (ListCat _, var) = parens ("map (fmap f)" <+> var)
     reccurse (_, var)          = parens ("fmap f" <+> var)
+
+-- it should look like this:
+-- instance SpanMappable Clafer where
+-- mapSpan (Clafer first _ _ _ last) = mapSpan first last
+genSpanInstance :: Data -> Doc
+genSpanInstance (cat, cons) =
+    "instance Spannable" <+> text (show cat) <+> "where"
+    $+$ nest 4 ( vcat $ map mkInstance cons)
+  where
+    mkInstance (f, cats) =
+        let variables = "s" <+> hsep (replicate (length cats) "_")
+        in "getSpan (" <> text f <+> variables <+> ") = s"
+
+  {-unlines (prHead: map prFunInst rules)-}
+  {-where-}
+    {-prHead= unwords ["instance Spannable", c, "where"]-}
+    {-prFunInst (fun, cats) = leftSide fun cats ++ " = " ++ rightSide cats-}
+    {-leftSide fun cats = unwords ["  getSpan (", fun, params cats, ")"] -- TODO-}
+    {-rightSide _ = "s"-}
+    {-params [] = "s"-}
+    {-params cats = unwords ("s" : map (\_ -> "_")  cats)-}
+
+genSpecSpanInstance :: Cat -> Doc
+genSpecSpanInstance c =
+    hang ("instance Spannable" <+> text (show c) <+> "where") 2 $
+    hang ("getSpan (" <> text (show c) <+> "((c, l), lex')) = "
+    $+$ (nest 2 "Span (Pos c' l') (Pos c' $ l' + len lex')")) 2 $
+    hang "where" 2 ("c' = toInteger c" $+$ "l' = toInteger l")
 
 
 -- | Generate a newtype declaration for Ident types

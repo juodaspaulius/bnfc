@@ -24,7 +24,7 @@ import BNFC.Backend.Common.StrUtils (escapeChars)
 import BNFC.Backend.Haskell.Utils (parserName, catToType)
 --import Lexer
 import Data.Char
-import BNFC.Options (HappyMode(..))
+import BNFC.Options (HappyMode(..),SharedOptions(..))
 import BNFC.PrettyPrint
 -- Type declarations
 
@@ -45,9 +45,7 @@ cf2HappyS :: String     -- ^ This module's name
           -> String     -- ^ Abstract syntax module name
           -> String     -- ^ Lexer module name
           -> String     -- ^ ErrM module name
-          -> HappyMode  -- ^ Happy mode
-          -> Bool       -- ^ Use bytestring?
-          -> Bool       -- ^ AST is a functor?
+          -> SharedOptions -- ^ Options
           -> CF         -- ^ Grammar
           -> String     -- ^ Generated code
 ---- cf2HappyS :: String -> CF -> String
@@ -55,16 +53,21 @@ cf2HappyS = cf2Happy
 
 -- The main function, that given a CF and a CFCat to parse according to,
 -- generates a happy module.
-cf2Happy name absName lexName errName mode byteStrings functor cf
+cf2Happy name absName lexName errName opts cf
  = unlines
-    [header name absName lexName errName mode byteStrings,
+    [header name absName lexName errName mode byteStrings',
      render $ declarations mode (allEntryPoints cf),
      tokens (cfTokens cf),
      specialToks cf,
      delimiter,
-     specialRules byteStrings cf,
-     render $ prRules functor (rulesForHappy functor cf),
-     finalize byteStrings cf]
+     specialRules byteStrings' cf,
+     render $ prRules functor' (rulesForHappy functor' pos' cf),
+     finalize byteStrings' pos' cf]
+  where
+    mode = glr opts
+    byteStrings' = byteStrings opts
+    functor' = functor opts
+    pos' = positionsInAST opts
 
 -- construct the header.
 header :: String -> String -> String -> String -> HappyMode -> Bool -> String
@@ -119,10 +122,10 @@ tokens toks = "%token\n" ++ prTokens toks
 convert :: String -> Doc
 convert = quotes . text . escapeChars
 
-rulesForHappy :: Bool -> CF -> Rules
-rulesForHappy functor cf = map mkOne $ ruleGroups cf
+rulesForHappy :: Bool -> Bool -> CF -> Rules
+rulesForHappy functor pos cf = map mkOne $ ruleGroups cf
   where
-    mkOne (cat,rules) = (cat, map (constructRule functor reversibles) rules)
+    mkOne (cat,rules) = (cat, map (constructRule functor pos reversibles cat) rules)
     reversibles = reversibleCats cf
 
 -- | For every non-terminal, we construct a set of rules. A rule is a sequence
@@ -147,10 +150,10 @@ rulesForHappy functor cf = map mkOne $ ruleGroups cf
 -- Note that functors don't concern list constructors:
 -- >>> constructRule True [ListCat (Cat "A")] (Rule "(:)" (ListCat (Cat "A")) [Left (Cat "A"), Right",", Left (ListCat (Cat "A"))])
 -- ("ListA A ','","flip (:) $1 $2")
-constructRule :: Bool -> [Cat] -> Rule -> (Pattern,Action)
-constructRule functor revs r0@(Rule fun cat _) = (pattern, action)
+constructRule :: Bool -> Bool -> [Cat] -> NonTerminal -> Rule -> (Pattern,Action)
+constructRule functor pos revs nt r0@(Rule fun cat _) = (pattern, action)
   where
-    (pattern,metavars) = generatePatterns revs r
+    (pattern,metavars) = generatePatterns pos revs nt r
     action | isCoercion fun                 = unwords metavars
            | isConsFun fun && elem cat revs = unwords ("flip" : fun : metavars)
            | isNilCons fun                  = unwords (underscore fun : metavars)
@@ -164,18 +167,25 @@ constructRule functor revs r0@(Rule fun cat _) = (pattern, action)
 -- Generate patterns and a set of metavariables indicating
 -- where in the pattern the non-terminal
 
-generatePatterns :: [Cat] -> Rule -> (Pattern,[MetaVar])
-generatePatterns revs r = case rhsRule r of
-  []  -> ("{- empty -}",[])
+generatePatterns :: Bool -> [Cat] -> NonTerminal -> Rule -> (Pattern,[MetaVar])
+generatePatterns pos revs nt r = case rhsRule r of
+  []  -> ("{- empty -}",[prMetaPos []])
   its -> (unwords (map mkIt its), metas its)
  where
    mkIt i = case i of
      Left c -> identCat c
      Right s -> render (convert s)
-   metas its = [revIf c ('$': show i) | (i,Left c) <- zip [1 ::Int ..] its]
+   metas its = prMetaPos its : [revIf c ('$': show i) | (i,Left c) <- zip [1 ::Int ..] its]
    revIf c m = if not (isConsFun (funRule r)) && elem c revs
                  then "(reverse " ++ m ++ ")"
-                 else m  -- no reversal in the left-recursive Cons rule itself
+               else m  -- no reversal in the left-recursive Cons rule itself
+   prMetaPos :: [Either Cat String] -> String
+   prMetaPos its = if not pos || isList nt || isCoercion (funRule r) then "" else render $ concatPos its
+   concatPos [] = text "noSpan"
+   concatPos its = parens $ hsep (punctuate " >-" $ map mkSinglePos $ zip [1 ::Int ..] its)
+   mkSinglePos (idx, item) = case item of
+     Left _ -> parens $ "mkCatSpan $" <> text (show idx) -- Category
+     Right _ -> parens $ "mkTokenSpan $" <> text (show idx) -- Token
 
 -- We have now constructed the patterns and actions,
 -- so the only thing left is to merge them into one string.
@@ -221,8 +231,8 @@ prRules functor = vcat . map prOne
 
 -- Finally, some haskell code.
 
-finalize :: Bool -> CF -> String
-finalize byteStrings cf = unlines $
+finalize :: Bool -> Bool -> CF -> String
+finalize byteStrings pos cf = unlines $
    [
      "{",
      "\nreturnM :: a -> Err a",
@@ -231,18 +241,34 @@ finalize byteStrings cf = unlines $
      "thenM = (>>=)",
      "\nhappyError :: [" ++ tokenName ++ "] -> Err a",
      "happyError ts =",
-     "  Bad $ \"syntax error at \" ++ tokenPos ts ++ ",
+     "  " ++ (if pos then "Bad (pp ts)" else "Bad") ++
+     " $ \"syntax error at \" ++ tokenPos ts ++ ",
      "  case ts of",
      "    [] -> []",
      "    [Err _] -> \" due to lexer error\"",
      "    _ -> \" before \" ++ unwords (map ("++stringUnpack++" . prToken) (take 4 ts))",
      "",
      "myLexer = tokens"
-   ] ++ definedRules cf ++ [ "}" ]
+   ] ++ (if pos then posFunctions else []) ++ definedRules cf ++ [ "}" ]
+
    where
-     stringUnpack
+    stringUnpack
        | byteStrings = "BS.unpack"
        | otherwise   = "id"
+    posFunctions :: [String]
+    posFunctions =
+      [ ""
+      , "gp x@(PT (Pn _ l c) _) = Span (Pos (toInteger l) (toInteger c)) (Pos (toInteger l) (toInteger c + toInteger (length $ prToken x)))"
+      , "pp (PT (Pn _ l c) _ :_) = Pos (toInteger l) (toInteger c)"
+      , "pp (Err (Pn _ l c) :_) = Pos (toInteger l) (toInteger c)"
+      , "pp _ = error \"EOF\"" -- End of file. What to do here?
+      , ""
+      , "mkCatSpan :: (Spannable c) => c -> Span"
+      , "mkCatSpan = getSpan"
+      , ""
+      , "mkTokenSpan :: Token -> Span"
+      , "mkTokenSpan = gp"
+      ]
 
 
 definedRules cf = [ mkDef f xs e | FunDef f xs e <- pragmasOfCF cf ]

@@ -73,6 +73,7 @@ data SharedOptions = Options
   , glr :: HappyMode
   , xml :: Int
   , ghcExtensions :: Bool
+  , positionsInAST :: Bool
   -- C++ specific
   , linenumbers :: Bool       -- ^ Add and set line_number field for syntax classes
   -- C# specific
@@ -99,6 +100,7 @@ defaultOptions = Options
   , glr = Standard
   , xml = 0
   , ghcExtensions = False
+  , positionsInAST = False
   , lang = error "lang not set"
   , linenumbers = False
   , visualStudio = False
@@ -116,7 +118,7 @@ globalOptions = [
 -- | Options for the target languages
 -- targetOptions :: [ OptDescr Target ]
 targetOptions :: [ OptDescr (SharedOptions -> SharedOptions)]
-targetOptions = 
+targetOptions =
   [ Option "" ["java"]          (NoArg (\o -> o {target = TargetJava}))
     "Output Java code for use with JLex and CUP"
   , Option "" ["haskell"]       (NoArg (\o -> o {target = TargetHaskell}))
@@ -190,6 +192,9 @@ specificOptions =
     , [TargetHaskell, TargetHaskellGadt, TargetProfile] )
   , ( Option []    ["ghc"] (NoArg (\o -> o {ghcExtensions = True}))
           "Use ghc-specific language extensions"
+    , [TargetHaskell, TargetHaskellGadt, TargetProfile] )
+  , ( Option []    ["pos"] (NoArg (\o -> o {positionsInAST = True}))
+          "Include positional information in generated AST nodes"
     , [TargetHaskell, TargetHaskellGadt, TargetProfile] )
   , ( Option []    ["functor"] (NoArg (\o -> o {functor = True}))
           "Make the AST a functor and use it to store the position of the nodes"
