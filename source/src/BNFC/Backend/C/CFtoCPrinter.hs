@@ -43,13 +43,14 @@ module BNFC.Backend.C.CFtoCPrinter (cf2CPrinter) where
 
 import BNFC.CF
 import BNFC.Utils ((+++))
+import BNFC.Backend.Common (renderListSepByPrecedence)
 import BNFC.Backend.Common.NamedVariables
 import BNFC.Backend.Common.StrUtils (renderCharOrString)
 import BNFC.Backend.Utils (isTokenType)
 import Data.List
 import Data.Char(toLower)
 import Data.Either (lefts)
-import Text.PrettyPrint
+import BNFC.PrettyPrint
 
 --Produces (.h file, .c file)
 cf2CPrinter :: CF -> (String, String)
@@ -166,6 +167,8 @@ mkCFile cf groups = concat
       "#include <stdio.h>",
       "#include <string.h>",
       "#include <stdlib.h>",
+      "",
+      "#define INDENT_WIDTH 2",
       "",
       "int _n_;",
       "char* buf_;",
@@ -336,9 +339,9 @@ prPrintFun _ = ""
 
 --Generates methods for the Pretty Printer
 prPrintData :: [UserDef] -> (Cat, [Rule]) -> String
-prPrintData user (cat, rules) =
+prPrintData user (cat, rules) = unlines $
  if isList cat
- then unlines
+ then
  [
   "void pp" ++ cl ++ "("++ cl +++ vname ++ ", int i)",
   "{",
@@ -353,14 +356,15 @@ prPrintData user (cat, rules) =
   "    else",
   "    {",
   visitMember,
-  "      render" ++ [sc] ++ "(" ++ sep ++ ");",
+  render (nest 6 (renderListSepByPrecedence "i" renderX
+      (getSeparatorByPrecedence rules))),
   "      " ++ vname +++ "=" +++ vname ++ "->" ++ vname ++ "_;",
   "    }",
   "  }",
   "}",
   ""
  ] --Not a list:
- else unlines
+ else
  [
    "void pp" ++ cl ++ "(" ++ cl ++ " _p_, int _i_)",
    "{",
@@ -378,10 +382,22 @@ prPrintData user (cat, rules) =
    ecl = identCat (normCatOfList cat)
    vname = map toLower cl
    member = map toLower ecl
-   visitMember = "      pp" ++ ecl ++ "(" ++ vname ++ "->" ++ member ++ "_, 0);"
-   (sc, sep) = renderCharOrString sep'
+   visitMember = "      pp" ++ ecl ++ "(" ++ vname ++ "->" ++ member ++ "_, i);"
    sep' = getCons rules
-   optsep = if hasOneFunc rules then "" else "      render" ++ [sc] ++ "(" ++ sep ++ ");"
+   optsep = if hasOneFunc rules then "" else "      " ++ render (renderX sep') ++ ";"
+
+-- | Helper function that call the right c function (renderC or renderS) to
+-- render a literal string.
+--
+-- >>> renderX ","
+-- renderC(',')
+--
+-- >>> renderX "---"
+-- renderS("---")
+renderX :: String -> Doc
+renderX sep' = "render" <> char sc <> parens (text sep)
+  where (sc, sep) = renderCharOrString sep'
+
 
 --Pretty Printer methods for a rule.
 prPrintRule :: [UserDef] -> Rule -> String
@@ -404,9 +420,7 @@ prPrintRule _ _ = ""
 --This goes on to recurse to the instance variables.
 prPrintCat :: [UserDef] -> String -> Either (Cat, Doc) String -> String
 prPrintCat user fnm (c) = case c of
-  Right t -> "    render" ++ [sc] ++ "(" ++ t' ++ ");\n"
-    where
-     (sc,t') = renderCharOrString t
+  Right t -> "    " ++ render (renderX t) ++ ";\n"
   Left (cat, nt) | isTokenType user cat -> "    pp" ++ basicFunName (render nt) ++ "(_p_->u." ++ v ++ "_." ++ render nt ++ ", " ++ show (precCat cat) ++ ");\n"
   Left (InternalCat, _) -> "    /* Internal Category */\n"
   Left (cat, nt) -> "    pp" ++ identCat (normCat cat) ++ "(_p_->u." ++ v ++ "_." ++ render nt ++ ", " ++ show (precCat cat) ++ ");\n"
@@ -433,9 +447,9 @@ prShowFun _ = ""
 
 --This prints the functions for Abstract Syntax tree printing.
 prShowData :: [UserDef] -> (Cat, [Rule]) -> String
-prShowData user (cat, rules) =
+prShowData user (cat, rules) = unlines $
  if isList cat
- then unlines
+ then
  [
   "void sh" ++ cl ++ "("++ cl +++ vname ++ ")",
   "{",
@@ -456,7 +470,7 @@ prShowData user (cat, rules) =
   "}",
   ""
  ] --Not a list:
- else unlines
+ else
  [
    "void sh" ++ cl ++ "(" ++ cl ++ " _p_)",
    "{",
@@ -499,7 +513,7 @@ prShowRule user (Rule fun _ cats) | not (isCoercion fun) = unlines
     insertSpaces (x:[]) = [x]
     insertSpaces (x:xs) = if x == ""
       then insertSpaces xs
-      else (x : ["  bufAppendC(' ');\n"]) ++ (insertSpaces xs)
+      else x : "  bufAppendC(' ');\n" : insertSpaces xs
     allTerms [] = True
     allTerms (Left _:_) = False
     allTerms (_:zs) = allTerms zs
@@ -515,22 +529,22 @@ prShowCat user fnm c = case c of
         "    sh" ++ identCat (normCat cat) ++ "(_p_->u." ++ v ++ "_." ++ render nt ++ ");\n"
     (cat,nt) -> concat
           [
-	   "    bufAppendC('[');\n",
+           "    bufAppendC('[');\n",
            "    sh" ++ identCat (normCat cat) ++ "(_p_->u." ++ v ++ "_." ++ render nt ++ ");\n",
-	   "    bufAppendC(']');\n"
+           "    bufAppendC(']');\n"
           ]
   where v = map toLower (normFun fnm)
 
 {- **** Helper Functions Section **** -}
 --The visit-function name of a basic type
 basicFunName :: String -> String
-basicFunName v =
-    if "integer_" `isPrefixOf` v then "Integer"
-    else if "char_" `isPrefixOf` v then "Char"
-    else if "string_" `isPrefixOf` v then "String"
-    else if "double_" `isPrefixOf` v then "Double"
-    else if "ident_" `isPrefixOf` v then "Ident"
-    else "Ident" --User-defined type
+basicFunName v
+  | "integer_" `isPrefixOf` v = "Integer"
+  | "char_" `isPrefixOf` v    = "Char"
+  | "string_" `isPrefixOf` v  = "String"
+  | "double_" `isPrefixOf` v  = "Double"
+  | "ident_" `isPrefixOf` v   = "Ident"
+  | otherwise = "Ident" --User-defined type
 
 --An extremely simple renderCer for terminals.
 prRender :: String
@@ -544,7 +558,7 @@ prRender = unlines
       "     bufAppendC('\\n');",
       "     indent();",
       "     bufAppendC(c);",
-      "     _n_ = _n_ + 2;",
+      "     _n_ = _n_ + INDENT_WIDTH;",
       "     bufAppendC('\\n');",
       "     indent();",
       "  }",
@@ -554,13 +568,14 @@ prRender = unlines
       "  {",
       "     backup();",
       "     bufAppendC(c);",
-      "     bufAppendC(' ');",
       "  }",
       "  else if (c == '}')",
       "  {",
-      "     _n_ = _n_ - 2;",
-      "     backup();",
-      "     backup();",
+      "     int t;",
+      "     _n_ = _n_ - INDENT_WIDTH;",
+      "     for(t=0; t<INDENT_WIDTH; t++) {",
+      "       backup();",
+      "     }",
       "     bufAppendC(c);",
       "     bufAppendC('\\n\');",
       "     indent();",
@@ -581,6 +596,7 @@ prRender = unlines
       "  else if (c == 0) return;",
       "  else",
       "  {",
+      "     bufAppendC(' ');",
       "     bufAppendC(c);",
       "     bufAppendC(' ');",
       "  }",

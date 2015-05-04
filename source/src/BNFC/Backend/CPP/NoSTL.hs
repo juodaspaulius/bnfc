@@ -20,14 +20,14 @@
 module BNFC.Backend.CPP.NoSTL (makeCppNoStl) where
 
 import BNFC.Utils
-import BNFC.Options
 import BNFC.CF
+import BNFC.Options
 import BNFC.Backend.Base
 import BNFC.Backend.CPP.NoSTL.CFtoCPPAbs
 import BNFC.Backend.CPP.NoSTL.CFtoFlex
 import BNFC.Backend.CPP.NoSTL.CFtoBison
 import BNFC.Backend.CPP.NoSTL.CFtoCVisitSkel
-import BNFC.Backend.CPP.NoSTL.CFtoCPPPrinter
+import BNFC.Backend.CPP.PrettyPrinter
 import Data.Char
 import qualified BNFC.Backend.Common.Makefile as Makefile
 
@@ -45,7 +45,7 @@ makeCppNoStl opts cf = do
     let (skelH, skelC) = cf2CVisitSkel cf
     mkfile "Skeleton.H" skelH
     mkfile "Skeleton.C" skelC
-    let (prinH, prinC) = cf2CPPPrinter cf
+    let (prinH, prinC) = cf2CPPPrinter False Nothing cf
     mkfile "Printer.H" prinH
     mkfile "Printer.C" prinC
     mkfile "Test.C" (cpptest cf)
@@ -54,19 +54,29 @@ makeCppNoStl opts cf = do
 
 makefile :: String -> String
 makefile name =
-  (++) (unlines [ "CC = g++", "CCFLAGS = -g", "FLEX = flex", "BISON = bison", "" ])
-  $ Makefile.mkRule "all" [ "Test" ++ name ]
+  (unlines [ "CC = g++",
+             "CCFLAGS = -g -W -Wall", "",
+             "FLEX = flex",
+             "FLEX_OPTS = -P" ++ name, "",
+             "BISON = bison",
+             "BISON_OPTS = -t -p" ++ name, "",
+             "OBJS = Absyn.o Lexer.o Parser.o Printer.o", "" ] ++)
+  $ Makefile.mkRule ".PHONY" ["clean", "distclean"]
+    []
+  $ Makefile.mkRule "all" [testName]
     []
   $ Makefile.mkRule "clean" []
     -- peteg: don't nuke what we generated - move that to the "vclean" target.
-    [ "rm -f *.o " ++ name ++ ".dvi " ++ name ++ ".aux " ++ name ++ ".log " ++ name ++ ".ps Test" ++ name ]
-  $ Makefile.mkRule "distclean" []
-    [ "rm -f *.o Absyn.C Absyn.H Test.C Parser.C Parser.H Lexer.C Skeleton.C Skeleton.H Printer.C Printer.H"
-    , "rm -f " ++ name ++ ".l " ++ name ++ ".y " ++ name ++ ".tex " ++ name ++ ".dvi " ++ name ++ ".aux "
-    , "rm -f " ++ name ++ ".log " ++ name ++ ".ps Test" ++ name ++ " Makefile" ]
-  $ Makefile.mkRule ("Test" ++ name) [ "Absyn.o", "Lexer.o", "Parser.o", "Printer.o", "Test.o" ]
-    [ "@echo \"Linking Test" ++ name ++ "...\""
-    , "${CC} ${CCFLAGS} *.o -o Test" ++ name ]
+    [ "rm -f *.o " ++ testName ++ " " ++ unwords
+      [ name ++ e | e <- [".aux", ".log", ".pdf",".dvi", ".ps", ""]] ]
+  $ Makefile.mkRule "distclean" ["clean"]
+    [ "rm -f " ++ unwords
+      [ "Absyn.C", "Absyn.H", "Test.C", "Parser.C", "Parser.H", "Lexer.C",
+        "Skeleton.C", "Skeleton.H", "Printer.C", "Printer.H", "Makefile " ]
+      ++ name ++ ".l " ++ name ++ ".y " ++ name ++ ".tex "]
+  $ Makefile.mkRule (testName) [ "${OBJS}", "Test.o" ]
+    [ "@echo \"Linking " ++ testName ++ "...\""
+    , "${CC} ${CCFLAGS} ${OBJS} Test.o -o " ++ testName ]
   $ Makefile.mkRule "Absyn.o" [ "Absyn.C", "Absyn.H" ]
     [ "${CC} ${CCFLAGS} -c Absyn.C" ]
   $ Makefile.mkRule "Lexer.C" [ name ++ ".l" ]
@@ -82,7 +92,7 @@ makefile name =
   $ Makefile.mkRule "Test.o" [ "Test.C", "Parser.H", "Printer.H", "Absyn.H" ]
     [ "${CC} ${CCFLAGS} -c Test.C" ]
   ""
-
+  where testName = "Test" ++ name
 
 cpptest :: CF -> String
 cpptest cf =

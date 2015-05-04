@@ -49,12 +49,13 @@ module BNFC.Backend.Java.CFtoJavaPrinter15 ( cf2JavaPrinter ) where
 import BNFC.Backend.Java.CFtoJavaAbs15
 
 import BNFC.CF
+import BNFC.Backend.Common (renderListSepByPrecedence)
 import BNFC.Backend.Common.NamedVariables
 import BNFC.Utils		( (+++) )
 import Data.List
 import Data.Char	( toLower, isSpace )
 import Data.Either (lefts)
-import Text.PrettyPrint
+import BNFC.PrettyPrint
 
 --Produces the PrettyPrinter class.
 --It will generate two methods "print" and "show"
@@ -83,6 +84,7 @@ cf2JavaPrinter packageBase packageAbsyn cf =
       "{",
       "  //For certain applications increasing the initial size of the buffer may improve performance.",
       "  private static final int INITIAL_BUFFER_SIZE = 128;",
+      "  private static final int INDENT_WIDTH = 2;",
       "  //You may wish to change the parentheses used in precedence.",
       "  private static final String _L_PAREN = new String(\"(\");",
       "  private static final String _R_PAREN = new String(\")\");",
@@ -137,7 +139,7 @@ prRender = unlines
       "       buf_.append(\"\\n\");",
       "       indent();",
       "       buf_.append(s);",
-      "       _n_ = _n_ + 2;",
+      "       _n_ = _n_ + INDENT_WIDTH;",
       "       buf_.append(\"\\n\");",
       "       indent();",
       "    }",
@@ -151,9 +153,11 @@ prRender = unlines
       "    }",
       "    else if (s.equals(\"}\"))",
       "    {",
-      "       _n_ = _n_ - 2;",
-      "       backup();",
-      "       backup();",
+      "       int t;",
+      "       _n_ = _n_ - INDENT_WIDTH;",
+      "       for(t=0; t<INDENT_WIDTH; t++) {",
+      "         backup();",
+      "       }",
       "       buf_.append(s);",
       "       buf_.append(\"\\n\");",
       "       indent();",
@@ -216,7 +220,7 @@ prData packageAbsyn user (cat, rules) =
   "  private static void pp(" ++ packageAbsyn ++ "."
       ++ identCat (normCat cat) +++ "foo, int _i_)",
   "  {",
-  (prList user cat rules) ++ "  }"
+  render $ nest 5 $ prList user cat rules <> "  }"
  ]
  else unlines --not a list
  [
@@ -250,24 +254,36 @@ prRule packageAbsyn r@(Rule fun _c cats) | not (isCoercion fun || isDefinedRule 
 
 prRule _nm _ = ""
 
-prList :: [UserDef] -> Cat -> [Rule] -> String
-prList user c rules = unlines
-  [
-   "     for (java.util.Iterator<" ++ et
-          ++ "> it = foo.iterator(); it.hasNext();)",
-   "     {",
-   "       pp(it.next(), 0);",
-   "       if (it.hasNext()) {",
-   "         render(\"" ++ sep ++ "\");",
-   "       } else {",
-   "         render(\"" ++ optsep ++ "\");",
-   "       }",
-   "     }"
-  ]
- where
-    et = typename (show $ normCatOfList c) user
+-- |
+--
+-- >>> let lfoo = ListCat (Cat "Foo")
+-- >>> prList [] lfoo [Rule "[]" lfoo [], Rule "(:)" lfoo [Left (Cat "Foo"), Right ".", Left lfoo]]
+-- for (java.util.Iterator<Foo> it = foo.iterator(); it.hasNext();)
+-- {
+--   pp(it.next(), _i_);
+--   if (it.hasNext()) {
+--     render(".");
+--   } else {
+--     render(".");
+--   }
+-- }
+prList :: [UserDef] -> Cat -> [Rule] -> Doc
+prList user c rules =
+    "for (java.util.Iterator<" <> et <> "> it = foo.iterator(); it.hasNext();)"
+    $$ codeblock 2
+        [ "pp(it.next(), _i_);"
+        , "if (it.hasNext()) {"
+        , nest 2 (renderListSepByPrecedence "_i_" renderSep
+            (getSeparatorByPrecedence rules))
+        , "} else {"
+        , nest 2 (renderSep optsep <> ";")
+        , "}"
+        ]
+   where
+    et = text (typename (show $ normCatOfList c) user)
     sep = escapeChars $ getCons rules
     optsep = if hasOneFunc rules then "" else sep
+    renderSep x = "render(\"" <> text x <>"\")"
 
 -- |
 -- >>> prCat "F" (Right "++")

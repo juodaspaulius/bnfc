@@ -18,6 +18,22 @@ Given a Labelled BNF grammar the tool produces:
 
 *More information*: http://bnfc.digitalgrammars.com/
 
+Requirements
+------------
+
+Everything needed to build bnfc is available in the
+[haskell platform](https://www.haskell.org/platform/).
+
+On Debian, you can install the dependencies as follows
+
+    sudo apt-get install haskell-platform
+
+On Fedora:
+
+    yum install haskell-platform
+
+Then proceed with the installation.
+
 Installation
 ------------
 
@@ -28,6 +44,12 @@ To install bnfc from git:
     cabal install
 
 To download the latest realease, see the bnfc website: http://bnfc.digitalgrammars.com/
+
+
+Documentation
+-------------
+
+https://bnfc.readthedocs.org/en/latest/
 
 Run tests
 ---------
